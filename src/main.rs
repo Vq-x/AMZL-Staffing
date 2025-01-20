@@ -102,6 +102,15 @@ struct Aisle {
     bag_records: Vec<BagRecord>,
 }
 
+impl Aisle {
+    fn total_packages(&self) -> i32 {
+        self.bag_records
+            .iter()
+            .map(|b| b.planned_package_count)
+            .sum()
+    }
+}
+
 #[derive(Debug)]
 struct Cluster {
     cluster: char,
@@ -167,10 +176,20 @@ fn main() {
             println!("{}", record.sort_zone.adjacent_aisle());
         }
         let floor = Floor::new(records);
-        println!("{:?}", floor);
+        println!("{:#?}", floor);
         println!("{:?} clusters", floor.clusters.len());
         let aisle_count = floor.clusters.iter().map(|c| c.aisles.len()).sum::<usize>();
         println!("{:?} aisles", aisle_count);
+        for cluster in &floor.clusters {
+            for aisle in &cluster.aisles {
+                println!(
+                    "{}-{}: {}",
+                    cluster.cluster,
+                    aisle.aisle,
+                    aisle.total_packages()
+                );
+            }
+        }
     } else {
         println!("error reading csv");
         process::exit(1);
