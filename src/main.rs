@@ -1,6 +1,5 @@
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::fmt;
 use std::{error::Error, fs::File, process};
 
