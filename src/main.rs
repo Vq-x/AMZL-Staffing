@@ -1,225 +1,44 @@
-use serde::de::{self, Deserializer, Visitor};
-use serde::Deserialize;
-use std::fmt;
-use std::{error::Error, fs::File, process};
+mod models;
+mod utils;
 
-#[derive(Debug, PartialEq)]
-struct SortZone {
-    cluster: char,
-    aisle: u32,
-    level: u32,
-    column: char,
-}
-impl SortZone {
-    fn to_string(&self) -> String {
-        format!(
-            "{}-{}.{}{}",
-            self.cluster, self.aisle, self.level, self.column
-        )
-    }
-    fn adjacent_aisle(&self) -> u32 {
-        if self.aisle % 2 == 0 {
-            self.aisle - 1
-        } else {
-            self.aisle + 1
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for SortZone {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct SortZoneVisitor;
-
-        impl<'de> Visitor<'de> for SortZoneVisitor {
-            type Value = SortZone;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a string in the format 'A-1.1A'")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<SortZone, E>
-            where
-                E: de::Error,
-            {
-                let parts: Vec<&str> = value.split('-').collect();
-                if parts.len() != 2 {
-                    return Err(de::Error::custom("expected format 'A-1.1A'"));
-                }
-
-                let cluster = parts[0]
-                    .chars()
-                    .next()
-                    .ok_or_else(|| de::Error::custom("missing cluster"))?;
-                let aisle_level_column: Vec<&str> = parts[1].split('.').collect();
-                if aisle_level_column.len() != 2 {
-                    return Err(de::Error::custom("expected format '1.1A'"));
-                }
-
-                let aisle = aisle_level_column[0]
-                    .parse::<u32>()
-                    .map_err(de::Error::custom)?;
-                let level_column: Vec<char> = aisle_level_column[1].chars().collect();
-                if level_column.len() != 2 {
-                    return Err(de::Error::custom("expected format '1A'"));
-                }
-
-                let level = level_column[0]
-                    .to_digit(10)
-                    .ok_or_else(|| de::Error::custom("invalid level"))?
-                    as u32;
-                let column = level_column[1];
-
-                Ok(SortZone {
-                    cluster,
-                    aisle,
-                    level,
-                    column,
-                })
-            }
-        }
-
-        deserializer.deserialize_str(SortZoneVisitor)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct BagRecord {
-    #[serde(rename = "Sort Zone")]
-    sort_zone: SortZone,
-    #[serde(rename = "Planned Bag Count")]
-    planned_bag_count: i32,
-    #[serde(rename = "Planned Package Count")]
-    planned_package_count: i32,
-}
-
-#[derive(Debug)]
-struct Aisle {
-    aisle: u32,
-    bag_records: Vec<BagRecord>,
-}
-
-impl Aisle {
-    fn total_packages(&self) -> i32 {
-        self.bag_records
-            .iter()
-            .map(|b| b.planned_package_count)
-            .sum()
-    }
-
-    fn get_bag_record(&self, sort_zone: SortZone) -> Option<&BagRecord> {
-        self.bag_records.iter().find(|b| b.sort_zone == sort_zone)
-    }
-}
-
-#[derive(Debug)]
-struct Cluster {
-    cluster: char,
-    aisles: Vec<Aisle>,
-}
-
-impl Cluster {
-    fn get_aisle(&self, aisle: u32) -> Option<&Aisle> {
-        self.aisles.iter().find(|a| a.aisle == aisle)
-    }
-}
-
-#[derive(Debug)]
-struct Floor {
-    clusters: Vec<Cluster>,
-}
-
-impl Floor {
-    fn new(bags: Vec<BagRecord>) -> Self {
-        let mut clusters: Vec<Cluster> = Vec::new();
-        for bag in bags {
-            let cluster_char = bag.sort_zone.cluster;
-            let aisle_number = bag.sort_zone.aisle;
-
-            // Find or create the cluster
-            let cluster = clusters.iter_mut().find(|c| c.cluster == cluster_char);
-            if let Some(cluster) = cluster {
-                // Find or create the aisle within the cluster
-                let aisle = cluster.aisles.iter_mut().find(|a| a.aisle == aisle_number);
-                if let Some(aisle) = aisle {
-                    aisle.bag_records.push(bag);
-                } else {
-                    cluster.aisles.push(Aisle {
-                        aisle: aisle_number,
-                        bag_records: vec![bag],
-                    });
-                }
-            } else {
-                // Create a new cluster and add the aisle
-                clusters.push(Cluster {
-                    cluster: cluster_char,
-                    aisles: vec![Aisle {
-                        aisle: aisle_number,
-                        bag_records: vec![bag],
-                    }],
-                });
-            }
-        }
-
-        Self { clusters }
-    }
-
-    fn packages_per_hour(&self, total_hours: i32) -> i32 {
-        self.clusters
-            .iter()
-            .map(|c| c.aisles.iter().map(|a| a.total_packages()).sum::<i32>())
-            .sum::<i32>()
-            / total_hours
-    }
-
-    fn get_aisle_in_cluster(&self, cluster: char, aisle: u32) -> Option<&Aisle> {
-        self.clusters
-            .iter()
-            .find(|c| c.cluster == cluster)
-            .and_then(|c| c.aisles.iter().find(|a| a.aisle == aisle))
-    }
-
-    fn get_cluster(&self, cluster: char) -> Option<&Cluster> {
-        self.clusters.iter().find(|c| c.cluster == cluster)
-    }
-}
-
-fn read_csv() -> Result<Vec<BagRecord>, Box<dyn Error>> {
-    let mut records: Vec<BagRecord> = Vec::new();
-    let file = File::open("test.csv")?;
-    let mut rdr = csv::Reader::from_reader(file);
-    for result in rdr.deserialize() {
-        let record: BagRecord = result?;
-        records.push(record);
-    }
-    Ok(records)
-}
+use models::{Floor, StowSlot};
+use std::process;
+use utils::read_csv;
 
 fn main() {
+    const TOTAL_HOURS: i32 = 6;
     if let Ok(records) = read_csv() {
-        println!("{:?}", records);
-        for record in &records {
-            println!("{}", record.sort_zone.adjacent_aisle());
-        }
         let floor = Floor::new(records);
-        println!("{:#?}", floor);
-        println!("{:?} clusters", floor.clusters.len());
         let aisle_count = floor.clusters.iter().map(|c| c.aisles.len()).sum::<usize>();
         println!("{:?} aisles", aisle_count);
-        for cluster in &floor.clusters {
-            for aisle in &cluster.aisles {
-                println!(
-                    "{}-{}: {}",
-                    cluster.cluster,
-                    aisle.aisle,
-                    aisle.total_packages()
-                );
-            }
+        println!("PPH: {}", floor.packages_per_hour(TOTAL_HOURS));
+
+        if let Some(aisle) = floor.get_aisle_in_cluster('A', 10) {
+            println!("PPH: {}", aisle.get_aisle_pph(TOTAL_HOURS));
+
+            let stow_slot = StowSlot::new(
+                vec![
+                    aisle.clone(),
+                    floor.get_aisle_in_cluster('A', 11).unwrap().clone(),
+                    floor.get_aisle_in_cluster('A', 12).unwrap().clone(),
+                    floor.get_aisle_in_cluster('A', 13).unwrap().clone(),
+                ],
+                false,
+                TOTAL_HOURS,
+            );
+            println!("StowSlot PPH: {}", stow_slot.pph);
         }
-        println!("PPH: {}", floor.packages_per_hour(6));
-        println!("{:#?}", floor.get_aisle_in_cluster('A', 10));
+
+        if let Some(cluster) = floor.get_cluster('N') {
+            if let Some(first_aisle) = cluster.get_first_aisle() {
+                println!("{:#?}", first_aisle);
+            }
+            if let Some(last_aisle) = cluster.get_last_aisle() {
+                println!("{:#?}", last_aisle);
+            }
+        } else {
+            println!("Cluster 'N' does not exist.");
+        }
     } else {
         println!("error reading csv");
         process::exit(1);
