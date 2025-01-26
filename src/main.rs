@@ -1,9 +1,9 @@
-use serde::de::{self, Deserializer, MapAccess, Visitor};
+use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
 use std::fmt;
 use std::{error::Error, fs::File, process};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct SortZone {
     cluster: char,
     aisle: u32,
@@ -108,12 +108,22 @@ impl Aisle {
             .map(|b| b.planned_package_count)
             .sum()
     }
+
+    fn get_bag_record(&self, sort_zone: SortZone) -> Option<&BagRecord> {
+        self.bag_records.iter().find(|b| b.sort_zone == sort_zone)
+    }
 }
 
 #[derive(Debug)]
 struct Cluster {
     cluster: char,
     aisles: Vec<Aisle>,
+}
+
+impl Cluster {
+    fn get_aisle(&self, aisle: u32) -> Option<&Aisle> {
+        self.aisles.iter().find(|a| a.aisle == aisle)
+    }
 }
 
 #[derive(Debug)]
@@ -155,6 +165,25 @@ impl Floor {
 
         Self { clusters }
     }
+
+    fn packages_per_hour(&self, total_hours: i32) -> i32 {
+        self.clusters
+            .iter()
+            .map(|c| c.aisles.iter().map(|a| a.total_packages()).sum::<i32>())
+            .sum::<i32>()
+            / total_hours
+    }
+
+    fn get_aisle_in_cluster(&self, cluster: char, aisle: u32) -> Option<&Aisle> {
+        self.clusters
+            .iter()
+            .find(|c| c.cluster == cluster)
+            .and_then(|c| c.aisles.iter().find(|a| a.aisle == aisle))
+    }
+
+    fn get_cluster(&self, cluster: char) -> Option<&Cluster> {
+        self.clusters.iter().find(|c| c.cluster == cluster)
+    }
 }
 
 fn read_csv() -> Result<Vec<BagRecord>, Box<dyn Error>> {
@@ -189,6 +218,8 @@ fn main() {
                 );
             }
         }
+        println!("PPH: {}", floor.packages_per_hour(6));
+        println!("{:#?}", floor.get_aisle_in_cluster('A', 10));
     } else {
         println!("error reading csv");
         process::exit(1);
