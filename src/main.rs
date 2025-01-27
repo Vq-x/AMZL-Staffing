@@ -21,11 +21,13 @@ fn main() {
         let aisle_count = floor.clusters.iter().map(|c| c.aisles.len()).sum::<usize>();
         println!("{:?} aisles", aisle_count);
         println!("PPH: {}", floor.packages_per_hour());
+        println!("Total packages: {}", floor.get_total_packages());
 
         let mut stow_slot_builder = StowSlotBuilder::new(&floor);
         stow_slot_builder.start_algorithm(250);
         stow_slot_builder.display_stow_slots();
         println!("Total stow slots: {}", stow_slot_builder.total_stow_slots());
+        stow_slot_builder.stow_slots_per_cluster();
     } else {
         println!("Error reading CSV file");
         process::exit(1);

@@ -115,13 +115,12 @@ impl Aisle {
 }
 
 #[derive(Debug)]
-pub struct Cluster<'a> {
+pub struct Cluster {
     pub cluster: char,
     pub aisles: Vec<Aisle>,
-    pub stow_slots: Vec<StowSlot<'a>>,
 }
 
-impl<'a> Cluster<'_> {
+impl Cluster {
     pub fn get_aisle(&self, aisle: u32) -> Option<&Aisle> {
         self.aisles.iter().find(|a| a.aisle_num == aisle)
     }
@@ -148,13 +147,13 @@ impl<'a> Cluster<'_> {
 }
 
 #[derive(Debug)]
-pub struct Floor<'a> {
-    pub clusters: Vec<Cluster<'a>>,
+pub struct Floor {
+    pub clusters: Vec<Cluster>,
 }
 
-impl<'a> Floor<'a> {
+impl Floor {
     pub fn new(bags: Vec<BagRecord>) -> Self {
-        let mut clusters: Vec<Cluster<'a>> = Vec::new();
+        let mut clusters: Vec<Cluster> = Vec::new();
         for bag in bags {
             let cluster_char = bag.sort_zone.cluster;
             let aisle_number = bag.sort_zone.aisle;
@@ -182,7 +181,6 @@ impl<'a> Floor<'a> {
                         aisle_num: aisle_number,
                         bag_records: vec![bag],
                     }],
-                    stow_slots: Vec::new(),
                 });
             }
         }
@@ -225,7 +223,7 @@ pub struct StowSlot<'a> {
     pub aisles: Vec<&'a Aisle>,
     pub is_floater: bool,
     pub pph: i32,
-    pub floor: &'a Floor<'a>,
+    pub floor: &'a Floor,
 }
 
 impl<'a> StowSlot<'a> {
@@ -286,22 +284,22 @@ impl<'a> StowSlot<'a> {
 
 #[derive(Debug)]
 pub struct StowSlotBuilder<'a> {
-    floor: &'a Floor<'a>,
+    floor: &'a Floor,
     pub stow_slots: Vec<StowSlot<'a>>,
 }
 
 impl<'a> StowSlotBuilder<'a> {
-    pub fn new(floor: &'a Floor<'a>) -> Self {
+    pub fn new(floor: &'a Floor) -> Self {
         Self {
             floor,
             stow_slots: Vec::new(),
         }
     }
 
-    pub fn get_stow_slot_from_aisle(&mut self, aisle: &'a Aisle) -> Option<&mut StowSlot<'a>> {
+    pub fn get_stow_slot_from_aisle(&mut self, aisle: &Aisle) -> Option<&mut StowSlot<'a>> {
         self.stow_slots
             .iter_mut()
-            .find(|s| s.aisles.iter().any(|&a| a == aisle))
+            .find(|s| s.aisles.iter().any(|a| *a == aisle))
     }
 
     pub fn display_stow_slots(&self) {
@@ -312,6 +310,19 @@ impl<'a> StowSlotBuilder<'a> {
 
     pub fn total_stow_slots(&self) -> i32 {
         self.stow_slots.len() as i32
+    }
+
+    pub fn stow_slots_per_cluster(&self) {
+        for cluster in &self.floor.clusters {
+            println!(
+                "stow slots in cluster {}: {}",
+                cluster.cluster,
+                self.stow_slots
+                    .iter()
+                    .filter(|s| s.cluster == cluster.cluster)
+                    .count()
+            );
+        }
     }
 
     pub fn start_algorithm(&mut self, target_pph: i32) {
@@ -329,7 +340,6 @@ impl<'a> StowSlotBuilder<'a> {
                         self.stow_slots.push(new_slot);
                     }
                     None => {
-                        // Handle the case where there is no previous aisle
                         println!(
                             "No previous aisle found for aisle number {} in cluster {}",
                             aisle.aisle_num, cluster.cluster
