@@ -1,0 +1,234 @@
+use serde::de::{self, Deserializer, Visitor};
+use serde::Deserialize;
+use std::fmt;
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct SortZone {
+    pub cluster: char,
+    pub aisle: u32,
+    pub level: u32,
+    pub column: char,
+}
+
+impl SortZone {
+    pub fn to_string(&self) -> String {
+        format!(
+            "{}-{}.{}{}",
+            self.cluster, self.aisle, self.level, self.column
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for SortZone {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct SortZoneVisitor;
+
+        impl<'de> Visitor<'de> for SortZoneVisitor {
+            type Value = SortZone;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string in the format 'A-1.1A'")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<SortZone, E>
+            where
+                E: de::Error,
+            {
+                let parts: Vec<&str> = value.split('-').collect();
+                if parts.len() != 2 {
+                    return Err(de::Error::custom("expected format 'A-1.1A'"));
+                }
+
+                let cluster = parts[0]
+                    .chars()
+                    .next()
+                    .ok_or_else(|| de::Error::custom("missing cluster"))?;
+                let aisle_level_column: Vec<&str> = parts[1].split('.').collect();
+                if aisle_level_column.len() != 2 {
+                    return Err(de::Error::custom("expected format '1.1A'"));
+                }
+
+                let aisle = aisle_level_column[0]
+                    .parse::<u32>()
+                    .map_err(de::Error::custom)?;
+                let level_column: Vec<char> = aisle_level_column[1].chars().collect();
+                if level_column.len() != 2 {
+                    return Err(de::Error::custom("expected format '1A'"));
+                }
+
+                let level = level_column[0]
+                    .to_digit(10)
+                    .ok_or_else(|| de::Error::custom("invalid level"))?;
+                let column = level_column[1];
+
+                Ok(SortZone {
+                    cluster,
+                    aisle,
+                    level,
+                    column,
+                })
+            }
+        }
+
+        deserializer.deserialize_str(SortZoneVisitor)
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct BagRecord {
+    #[serde(rename = "Sort Zone")]
+    pub sort_zone: SortZone,
+    #[serde(rename = "Planned Bag Count")]
+    pub planned_bag_count: i32,
+    #[serde(rename = "Planned Package Count")]
+    pub planned_package_count: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct Aisle {
+    pub cluster: char,
+    pub aisle: u32,
+    pub bag_records: Vec<BagRecord>,
+}
+
+impl Aisle {
+    pub fn total_packages(&self) -> i32 {
+        self.bag_records
+            .iter()
+            .map(|b| b.planned_package_count)
+            .sum()
+    }
+
+    pub fn get_aisle_pph(&self, total_hours: i32) -> i32 {
+        self.total_packages() / total_hours
+    }
+
+    pub fn display_aisle(&self) -> String {
+        format!("{}-{}", self.cluster, self.aisle)
+    }
+}
+
+#[derive(Debug)]
+pub struct Cluster {
+    pub cluster: char,
+    pub aisles: Vec<Aisle>,
+    pub stow_slots: Vec<StowSlot>,
+}
+
+impl Cluster {
+    pub fn get_aisle(&self, aisle: u32) -> Option<&Aisle> {
+        self.aisles.iter().find(|a| a.aisle == aisle)
+    }
+
+    pub fn get_first_aisle(&self) -> Option<&Aisle> {
+        self.aisles.iter().min_by_key(|a| a.aisle)
+    }
+
+    pub fn get_last_aisle(&self) -> Option<&Aisle> {
+        self.aisles.iter().max_by_key(|a| a.aisle)
+    }
+
+    pub fn get_total_packages(&self) -> i32 {
+        self.aisles.iter().map(|a| a.total_packages()).sum::<i32>()
+    }
+}
+
+#[derive(Debug)]
+pub struct Floor {
+    pub clusters: Vec<Cluster>,
+}
+
+impl Floor {
+    pub fn new(bags: Vec<BagRecord>) -> Self {
+        let mut clusters: Vec<Cluster> = Vec::new();
+        for bag in bags {
+            let cluster_char = bag.sort_zone.cluster;
+            let aisle_number = bag.sort_zone.aisle;
+
+            let cluster = clusters.iter_mut().find(|c| c.cluster == cluster_char);
+            if let Some(cluster) = cluster {
+                let aisle = cluster.aisles.iter_mut().find(|a| a.aisle == aisle_number);
+                if let Some(aisle) = aisle {
+                    aisle.bag_records.push(bag);
+                } else {
+                    cluster.aisles.push(Aisle {
+                        cluster: cluster_char,
+                        aisle: aisle_number,
+                        bag_records: vec![bag],
+                    });
+                }
+            } else {
+                clusters.push(Cluster {
+                    cluster: cluster_char,
+                    aisles: vec![Aisle {
+                        cluster: cluster_char,
+                        aisle: aisle_number,
+                        bag_records: vec![bag],
+                    }],
+                    stow_slots: Vec::new(),
+                });
+            }
+        }
+
+        Self { clusters }
+    }
+
+    pub fn packages_per_hour(&self, total_hours: i32) -> i32 {
+        self.clusters
+            .iter()
+            .map(|c| c.aisles.iter().map(|a| a.total_packages()).sum::<i32>())
+            .sum::<i32>()
+            / total_hours
+    }
+
+    pub fn get_aisle_in_cluster(&self, cluster: char, aisle: u32) -> Option<&Aisle> {
+        self.clusters
+            .iter()
+            .find(|c| c.cluster == cluster)
+            .and_then(|c| c.aisles.iter().find(|a| a.aisle == aisle))
+    }
+
+    pub fn get_cluster(&self, cluster: char) -> Option<&Cluster> {
+        self.clusters.iter().find(|c| c.cluster == cluster)
+    }
+
+    pub fn get_total_packages(&self) -> i32 {
+        self.clusters
+            .iter()
+            .map(|c| c.get_total_packages())
+            .sum::<i32>()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StowSlot {
+    pub aisles: Vec<Aisle>,
+    pub is_floater: bool,
+    pub pph: i32,
+}
+
+impl StowSlot {
+    pub fn new(aisles: Vec<Aisle>, is_floater: bool, total_hours: i32) -> Self {
+        let pph = aisles.iter().map(|a| a.total_packages()).sum::<i32>() / total_hours;
+        Self {
+            aisles,
+            is_floater,
+            pph,
+        }
+    }
+    pub fn display_aisles(&self) {
+        for aisle in &self.aisles {
+            println!("{}", aisle.display_aisle());
+        }
+    }
+    pub fn display_aisle_range(&self) {
+        println!(
+            "{} - {}",
+            self.aisles.first().unwrap().display_aisle(),
+            self.aisles.last().unwrap().display_aisle()
+        );
+    }
+}

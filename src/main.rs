@@ -27,17 +27,7 @@ fn main() {
                 TOTAL_HOURS,
             );
             println!("StowSlot PPH: {}", stow_slot.pph);
-        }
-
-        if let Some(cluster) = floor.get_cluster('N') {
-            if let Some(first_aisle) = cluster.get_first_aisle() {
-                println!("{:#?}", first_aisle);
-            }
-            if let Some(last_aisle) = cluster.get_last_aisle() {
-                println!("{:#?}", last_aisle);
-            }
-        } else {
-            println!("Cluster 'N' does not exist.");
+            stow_slot.display_aisle_range();
         }
     } else {
         println!("error reading csv");
