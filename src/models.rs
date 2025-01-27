@@ -1,6 +1,9 @@
+use once_cell::sync::Lazy;
 use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
 use std::fmt;
+
+pub static TOTAL_HOURS: Lazy<i32> = Lazy::new(|| 6);
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SortZone {
@@ -77,7 +80,7 @@ impl<'de> Deserialize<'de> for SortZone {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct BagRecord {
     #[serde(rename = "Sort Zone")]
     pub sort_zone: SortZone,
@@ -87,10 +90,10 @@ pub struct BagRecord {
     pub planned_package_count: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Aisle {
     pub cluster: char,
-    pub aisle: u32,
+    pub aisle_num: u32,
     pub bag_records: Vec<BagRecord>,
 }
 
@@ -102,61 +105,72 @@ impl Aisle {
             .sum()
     }
 
-    pub fn get_aisle_pph(&self, total_hours: i32) -> i32 {
-        self.total_packages() / total_hours
+    pub fn get_aisle_pph(&self) -> i32 {
+        self.total_packages() / *TOTAL_HOURS
     }
 
     pub fn display_aisle(&self) -> String {
-        format!("{}-{}", self.cluster, self.aisle)
+        format!("{}-{}", self.cluster, self.aisle_num)
     }
 }
 
 #[derive(Debug)]
-pub struct Cluster {
+pub struct Cluster<'a> {
     pub cluster: char,
     pub aisles: Vec<Aisle>,
-    pub stow_slots: Vec<StowSlot>,
+    pub stow_slots: Vec<StowSlot<'a>>,
 }
 
-impl Cluster {
+impl<'a> Cluster<'a> {
     pub fn get_aisle(&self, aisle: u32) -> Option<&Aisle> {
-        self.aisles.iter().find(|a| a.aisle == aisle)
+        self.aisles.iter().find(|a| a.aisle_num == aisle)
     }
 
     pub fn get_first_aisle(&self) -> Option<&Aisle> {
-        self.aisles.iter().min_by_key(|a| a.aisle)
+        self.aisles.iter().min_by_key(|a| a.aisle_num)
     }
 
     pub fn get_last_aisle(&self) -> Option<&Aisle> {
-        self.aisles.iter().max_by_key(|a| a.aisle)
+        self.aisles.iter().max_by_key(|a| a.aisle_num)
     }
 
     pub fn get_total_packages(&self) -> i32 {
         self.aisles.iter().map(|a| a.total_packages()).sum::<i32>()
     }
+
+    pub fn get_next_aisle(&self, aisle: u32) -> Option<&Aisle> {
+        self.aisles.iter().find(|a| a.aisle_num == aisle + 1)
+    }
+
+    pub fn get_previous_aisle(&self, aisle: u32) -> Option<&Aisle> {
+        self.aisles.iter().find(|a| a.aisle_num == aisle - 1)
+    }
 }
 
 #[derive(Debug)]
-pub struct Floor {
-    pub clusters: Vec<Cluster>,
+pub struct Floor<'a> {
+    pub clusters: Vec<Cluster<'a>>,
 }
 
-impl Floor {
+impl<'a> Floor<'a> {
     pub fn new(bags: Vec<BagRecord>) -> Self {
-        let mut clusters: Vec<Cluster> = Vec::new();
+        let mut clusters: Vec<Cluster<'a>> = Vec::new();
         for bag in bags {
             let cluster_char = bag.sort_zone.cluster;
             let aisle_number = bag.sort_zone.aisle;
 
             let cluster = clusters.iter_mut().find(|c| c.cluster == cluster_char);
             if let Some(cluster) = cluster {
-                let aisle = cluster.aisles.iter_mut().find(|a| a.aisle == aisle_number);
+                let aisle = cluster
+                    .aisles
+                    .iter_mut()
+                    .find(|a| a.aisle_num == aisle_number);
                 if let Some(aisle) = aisle {
                     aisle.bag_records.push(bag);
                 } else {
                     cluster.aisles.push(Aisle {
                         cluster: cluster_char,
-                        aisle: aisle_number,
+                        aisle_num: aisle_number,
                         bag_records: vec![bag],
                     });
                 }
@@ -165,7 +179,7 @@ impl Floor {
                     cluster: cluster_char,
                     aisles: vec![Aisle {
                         cluster: cluster_char,
-                        aisle: aisle_number,
+                        aisle_num: aisle_number,
                         bag_records: vec![bag],
                     }],
                     stow_slots: Vec::new(),
@@ -176,19 +190,19 @@ impl Floor {
         Self { clusters }
     }
 
-    pub fn packages_per_hour(&self, total_hours: i32) -> i32 {
+    pub fn packages_per_hour(&self) -> i32 {
         self.clusters
             .iter()
             .map(|c| c.aisles.iter().map(|a| a.total_packages()).sum::<i32>())
             .sum::<i32>()
-            / total_hours
+            / *TOTAL_HOURS
     }
 
     pub fn get_aisle_in_cluster(&self, cluster: char, aisle: u32) -> Option<&Aisle> {
         self.clusters
             .iter()
             .find(|c| c.cluster == cluster)
-            .and_then(|c| c.aisles.iter().find(|a| a.aisle == aisle))
+            .and_then(|c| c.aisles.iter().find(|a| a.aisle_num == aisle))
     }
 
     pub fn get_cluster(&self, cluster: char) -> Option<&Cluster> {
@@ -204,31 +218,120 @@ impl Floor {
 }
 
 #[derive(Debug, Clone)]
-pub struct StowSlot {
-    pub aisles: Vec<Aisle>,
+pub struct StowSlot<'a> {
+    pub cluster: char,
+    pub aisles: Vec<&'a Aisle>,
     pub is_floater: bool,
     pub pph: i32,
+    pub floor: &'a Floor<'a>,
 }
 
-impl StowSlot {
-    pub fn new(aisles: Vec<Aisle>, is_floater: bool, total_hours: i32) -> Self {
-        let pph = aisles.iter().map(|a| a.total_packages()).sum::<i32>() / total_hours;
+impl<'a> StowSlot<'a> {
+    pub fn new(cluster: char, aisles: Vec<&'a Aisle>, is_floater: bool, floor: &'a Floor) -> Self {
+        let pph = aisles.iter().map(|a| a.total_packages()).sum::<i32>() / *TOTAL_HOURS;
         Self {
+            cluster,
             aisles,
             is_floater,
             pph,
+            floor,
         }
     }
+
+    pub fn add_aisle(&mut self, aisle: &'a Aisle) {
+        self.aisles.push(aisle);
+        self.update_pph();
+    }
+
+    pub fn add_aisle_range(&mut self, start: u32, end: u32, cluster: char) {
+        for aisle in start..end {
+            if let Some(aisle_ref) = self.floor.get_aisle_in_cluster(cluster, aisle) {
+                self.add_aisle(aisle_ref);
+            }
+        }
+    }
+
+    fn update_pph(&mut self) {
+        self.pph = self.aisles.iter().map(|a| a.total_packages()).sum::<i32>() / *TOTAL_HOURS;
+    }
+
     pub fn display_aisles(&self) {
         for aisle in &self.aisles {
             println!("{}", aisle.display_aisle());
         }
     }
+
     pub fn display_aisle_range(&self) {
         println!(
-            "{} - {}",
+            "{} - {}: {} PPH, is consecutive: {}",
             self.aisles.first().unwrap().display_aisle(),
-            self.aisles.last().unwrap().display_aisle()
+            self.aisles.last().unwrap().display_aisle(),
+            self.pph,
+            self.is_consecutive()
         );
+    }
+
+    pub fn is_consecutive(&self) -> bool {
+        self.aisles
+            .iter()
+            .zip(self.aisles.iter().skip(1))
+            .all(|(a, b)| a.aisle_num + 1 == b.aisle_num)
+    }
+}
+
+#[derive(Debug)]
+pub struct StowSlotBuilder<'a> {
+    floor: &'a Floor<'a>,
+    pub stow_slots: Vec<StowSlot<'a>>,
+}
+
+impl<'a> StowSlotBuilder<'a> {
+    pub fn new(floor: &'a Floor<'a>) -> Self {
+        Self {
+            floor,
+            stow_slots: Vec::new(),
+        }
+    }
+
+    pub fn get_stow_slot_from_aisle(&mut self, aisle: &'a Aisle) -> Option<&mut StowSlot<'a>> {
+        self.stow_slots
+            .iter_mut()
+            .find(|s| s.aisles.iter().any(|&a| a == aisle))
+    }
+
+    pub fn display_stow_slots(&self) {
+        for slot in &self.stow_slots {
+            slot.display_aisle_range();
+        }
+    }
+
+    pub fn start_algorithm(&mut self, target_pph: i32) {
+        for cluster in &self.floor.clusters {
+            for aisle in &cluster.aisles {
+                match cluster.get_previous_aisle(aisle.aisle_num) {
+                    Some(previous_aisle) => {
+                        if let Some(existing_slot) = self.get_stow_slot_from_aisle(previous_aisle) {
+                            if existing_slot.pph <= target_pph {
+                                existing_slot.add_aisle(aisle);
+                                continue;
+                            }
+                        }
+                        let new_slot =
+                            StowSlot::new(cluster.cluster, vec![aisle], false, self.floor);
+                        self.stow_slots.push(new_slot);
+                    }
+                    None => {
+                        // Handle the case where there is no previous aisle
+                        println!(
+                            "No previous aisle found for aisle number {} in cluster {}",
+                            aisle.aisle_num, cluster.cluster
+                        );
+                        let new_slot =
+                            StowSlot::new(cluster.cluster, vec![aisle], false, self.floor);
+                        self.stow_slots.push(new_slot);
+                    }
+                }
+            }
+        }
     }
 }

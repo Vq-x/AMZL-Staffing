@@ -1,4 +1,5 @@
 use crate::models::BagRecord;
+use crate::models::TOTAL_HOURS;
 use csv::Reader;
 use std::{error::Error, fs::File};
 
