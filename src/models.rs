@@ -121,7 +121,7 @@ pub struct Cluster<'a> {
     pub stow_slots: Vec<StowSlot<'a>>,
 }
 
-impl<'a> Cluster<'a> {
+impl<'a> Cluster<'_> {
     pub fn get_aisle(&self, aisle: u32) -> Option<&Aisle> {
         self.aisles.iter().find(|a| a.aisle_num == aisle)
     }
@@ -186,7 +186,9 @@ impl<'a> Floor<'a> {
                 });
             }
         }
-
+        clusters.iter_mut().for_each(|c| {
+            c.aisles.sort_by_key(|a| a.aisle_num);
+        });
         Self { clusters }
     }
 
@@ -227,15 +229,16 @@ pub struct StowSlot<'a> {
 }
 
 impl<'a> StowSlot<'a> {
-    pub fn new(cluster: char, aisles: Vec<&'a Aisle>, is_floater: bool, floor: &'a Floor) -> Self {
-        let pph = aisles.iter().map(|a| a.total_packages()).sum::<i32>() / *TOTAL_HOURS;
-        Self {
+    pub fn new(cluster: char, aisles: Vec<&'a Aisle>, floor: &'a Floor) -> Self {
+        let mut obj = Self {
             cluster,
             aisles,
-            is_floater,
-            pph,
+            is_floater: false,
+            pph: 0,
             floor,
-        }
+        };
+        obj.update_pph();
+        obj
     }
 
     pub fn add_aisle(&mut self, aisle: &'a Aisle) {
@@ -253,6 +256,7 @@ impl<'a> StowSlot<'a> {
 
     fn update_pph(&mut self) {
         self.pph = self.aisles.iter().map(|a| a.total_packages()).sum::<i32>() / *TOTAL_HOURS;
+        self.is_floater = self.pph <= 150;
     }
 
     pub fn display_aisles(&self) {
@@ -263,11 +267,12 @@ impl<'a> StowSlot<'a> {
 
     pub fn display_aisle_range(&self) {
         println!(
-            "{} - {}: {} PPH, is consecutive: {}",
+            "{} - {}: {} PPH, is consecutive: {}, is floater: {}",
             self.aisles.first().unwrap().display_aisle(),
             self.aisles.last().unwrap().display_aisle(),
             self.pph,
-            self.is_consecutive()
+            self.is_consecutive(),
+            self.is_floater
         );
     }
 
@@ -305,6 +310,10 @@ impl<'a> StowSlotBuilder<'a> {
         }
     }
 
+    pub fn total_stow_slots(&self) -> i32 {
+        self.stow_slots.len() as i32
+    }
+
     pub fn start_algorithm(&mut self, target_pph: i32) {
         for cluster in &self.floor.clusters {
             for aisle in &cluster.aisles {
@@ -316,8 +325,7 @@ impl<'a> StowSlotBuilder<'a> {
                                 continue;
                             }
                         }
-                        let new_slot =
-                            StowSlot::new(cluster.cluster, vec![aisle], false, self.floor);
+                        let new_slot = StowSlot::new(cluster.cluster, vec![aisle], self.floor);
                         self.stow_slots.push(new_slot);
                     }
                     None => {
@@ -326,8 +334,7 @@ impl<'a> StowSlotBuilder<'a> {
                             "No previous aisle found for aisle number {} in cluster {}",
                             aisle.aisle_num, cluster.cluster
                         );
-                        let new_slot =
-                            StowSlot::new(cluster.cluster, vec![aisle], false, self.floor);
+                        let new_slot = StowSlot::new(cluster.cluster, vec![aisle], self.floor);
                         self.stow_slots.push(new_slot);
                     }
                 }
