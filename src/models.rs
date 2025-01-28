@@ -14,7 +14,7 @@ pub struct SortZone {
 }
 
 impl SortZone {
-    pub fn to_string(&self) -> String {
+    pub fn display(&self) -> String {
         format!(
             "{}-{}.{}{}",
             self.cluster, self.aisle, self.level, self.column
