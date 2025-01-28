@@ -2,13 +2,11 @@ mod config;
 mod models;
 mod utils;
 
-use config::Config;
 use models::{Floor, StowSlotBuilder};
 use std::env;
 use std::io::{self, Write};
-use std::path::PathBuf;
 use std::process;
-use utils::{read_csv, read_config};
+use utils::{read_config, read_csv};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -21,7 +19,9 @@ fn main() {
 
     // Determine the directory of the executable
     let exe_path = env::current_exe().expect("Failed to get current executable path");
-    let exe_dir = exe_path.parent().expect("Failed to get executable directory");
+    let exe_dir = exe_path
+        .parent()
+        .expect("Failed to get executable directory");
 
     // Construct the path to the config file
     let config_file_path = exe_dir.join("config.toml");

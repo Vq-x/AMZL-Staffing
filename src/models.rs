@@ -1,9 +1,14 @@
+use crate::utils::read_config;
 use once_cell::sync::Lazy;
 use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
 use std::fmt;
 
-pub static TOTAL_HOURS: Lazy<i32> = Lazy::new(|| 6);
+pub static TOTAL_HOURS: Lazy<i32> = Lazy::new(|| {
+    read_config("config.toml")
+        .expect("could not read config")
+        .total_hours
+});
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SortZone {
