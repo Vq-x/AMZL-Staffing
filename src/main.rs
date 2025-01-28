@@ -12,7 +12,11 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: {} <csv_file_path>", args[0]);
-        process::exit(1);
+        println!("ensure that you drag your csv file onto the executable");
+        println!("Press Enter to exit...");
+        let _ = io::stdout().flush();
+        let _ = io::stdin().read_line(&mut String::new());
+        process::exit(0);
     }
 
     let csv_file_path = &args[1];
