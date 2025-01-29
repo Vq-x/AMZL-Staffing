@@ -16,7 +16,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
-          targets: x86_64-pc-windows-gnu, x86_64-unknown-linux-gnu, x86_64-apple-darwin
+          targets: x86_64-pc-windows-gnu, x86_64-unknown-linux-gnu
 
       - name: Install dependencies
         run: |
@@ -29,9 +29,6 @@ jobs:
       - name: Build Linux
         run: cargo build --release --target x86_64-unknown-linux-gnu
 
-      - name: Build macOS
-        run: cargo build --release --target x86_64-apple-darwin
-
       - name: Archive Windows
         uses: actions/upload-artifact@v4
         with:
@@ -43,9 +40,3 @@ jobs:
         with:
           name: release-linux
           path: target/x86_64-unknown-linux-gnu/release/
-
-      - name: Archive macOS
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-macos
-          path: target/x86_64-apple-darwin/release/
