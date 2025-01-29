@@ -2,61 +2,52 @@ mod config;
 mod models;
 mod utils;
 
-use models::{Floor, StowSlotBuilder};
 use std::env;
+use std::error::Error;
 use std::io::{self, Write};
 use std::process;
-use utils::{get_config_file_path, read_config, read_csv};
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: {} <csv_file_path>", args[0]);
-        println!("ensure that you drag your csv file onto the executable");
-        println!("Press Enter to exit...");
-        let _ = io::stdout().flush();
-        let _ = io::stdin().read_line(&mut String::new());
-        process::exit(0);
-    }
-
-    let csv_file_path = &args[1];
-
-    // Get the path to the config file
-    let config_file_path = match get_config_file_path() {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("Error determining config file path: {}", e);
-            process::exit(1);
-        }
-    };
-
-    // Read the config file
-    let config = match read_config(config_file_path.to_str().unwrap()) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Error reading config file: {}", e);
-            process::exit(1);
-        }
-    };
-
-    if let Ok(records) = read_csv(csv_file_path) {
-        let floor = Floor::new(records);
-        let aisle_count = floor.clusters.iter().map(|c| c.aisles.len()).sum::<usize>();
-        println!("{:?} aisles", aisle_count);
-        println!("PPH: {}", floor.packages_per_hour());
-        println!("Total packages: {}", floor.get_total_packages());
-
-        let mut stow_slot_builder = StowSlotBuilder::new(&floor);
-        stow_slot_builder.start_algorithm(config.target_pph);
-        stow_slot_builder.display_stow_slots();
-        println!("Total stow slots: {}", stow_slot_builder.total_stow_slots());
-        stow_slot_builder.stow_slots_per_cluster();
-    } else {
-        println!("Error reading CSV file");
+        println!("Drag CSV file onto executable");
+        wait_for_enter()?;
         process::exit(1);
     }
 
+    let config = utils::Config::load()?;
+    let records = utils::read_csv(&args[1])?;
+    let floor = models::Floor::new(records);
+    print_summary(&floor);
+
+    let mut stow_slot_builder = models::StowSlotBuilder::new(&floor);
+    stow_slot_builder.start_algorithm(config.target_pph);
+    print_results(&stow_slot_builder);
+
+    wait_for_enter()?;
+    Ok(())
+}
+
+fn print_summary(floor: &models::Floor) {
+    println!(
+        "Aisles: {}",
+        floor.clusters.iter().map(|c| c.aisles.len()).sum::<usize>()
+    );
+    println!("PPH: {}", floor.packages_per_hour());
+    println!("Total Packages: {}", floor.get_total_packages());
+}
+
+fn print_results(builder: &models::StowSlotBuilder) {
+    builder.display_stow_slots();
+    println!("Total Stow Slots: {}", builder.total_stow_slots());
+    builder.stow_slots_per_cluster();
+}
+
+fn wait_for_enter() -> io::Result<()> {
     println!("Press Enter to exit...");
-    let _ = io::stdout().flush();
-    let _ = io::stdin().read_line(&mut String::new());
+    io::stdout().flush()?;
+    let mut buffer = String::new();
+    io::stdin().read_line(&mut buffer)?;
+    Ok(())
 }

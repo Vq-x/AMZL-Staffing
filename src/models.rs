@@ -1,14 +1,12 @@
-use crate::utils::read_config;
+use crate::utils::Config;
 use once_cell::sync::Lazy;
 use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
+use std::error::Error;
 use std::fmt;
+use std::path::Path;
 
-pub static TOTAL_HOURS: Lazy<i32> = Lazy::new(|| {
-    read_config("config.toml")
-        .expect("could not read config")
-        .total_hours
-});
+pub static TOTAL_HOURS: Lazy<i32> = Lazy::new(|| Config::load().unwrap().total_hours);
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SortZone {
@@ -220,6 +218,15 @@ impl Floor {
             .map(|c| c.get_total_packages())
             .sum::<i32>()
     }
+
+    pub fn from_csv<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
+        let records = crate::utils::read_csv(path.as_ref().to_str().unwrap())?;
+        Ok(Self::new(records))
+    }
+
+    pub fn cluster(&self, cluster: char) -> Option<&Cluster> {
+        self.clusters.iter().find(|c| c.cluster == cluster)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -355,5 +362,10 @@ impl<'a> StowSlotBuilder<'a> {
                 }
             }
         }
+    }
+
+    pub fn with_target_pph(mut self, target_pph: i32) -> Self {
+        self.start_algorithm(target_pph);
+        self
     }
 }
