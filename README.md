@@ -1,0 +1,1 @@
+Automatically give staffing for stowers at Amazon DS. This is a quick tool to help evenly distribute aisles. I look to improve on the algorithm like moving the floater to the middle of the cluster to even out work. The config file to change the target pph and total stowing hours can be found in your app_data directory on windows.
