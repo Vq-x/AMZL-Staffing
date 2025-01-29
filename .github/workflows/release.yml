@@ -6,48 +6,46 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-
-        include:
-          - os: windows-latest
-
-            artifact: "*.exe"
-
-          - os: ubuntu-latest
-
-            artifact: "*-unknown-linux-gnu"
-
-          - os: macos-latest
-
-            artifact: "*-apple-darwin"
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-
         uses: actions/checkout@v4
 
       - name: Setup Rust
-
         uses: dtolnay/rust-toolchain@master
-
         with:
           toolchain: stable
-
           targets: x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu, x86_64-apple-darwin
 
-      - name: Build
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64
 
-        run: cargo build --release
+      - name: Build Windows
+        run: cargo build --release --target x86_64-pc-windows-msvc
 
-      - name: Archive Release
+      - name: Build Linux
+        run: cargo build --release --target x86_64-unknown-linux-gnu
 
+      - name: Build macOS
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Archive Windows
         uses: actions/upload-artifact@v4
-
         with:
-          name: release-${{ matrix.os }}
+          name: release-windows
+          path: target/x86_64-pc-windows-msvc/release/*.exe
 
-          path: target/release/${{ matrix.artifact }}
+      - name: Archive Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: target/x86_64-unknown-linux-gnu/release/
+
+      - name: Archive macOS
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: target/x86_64-apple-darwin/release/
