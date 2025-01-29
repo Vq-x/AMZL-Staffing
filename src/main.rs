@@ -6,7 +6,7 @@ use models::{Floor, StowSlotBuilder};
 use std::env;
 use std::io::{self, Write};
 use std::process;
-use utils::{read_config, read_csv};
+use utils::{get_config_file_path, read_config, read_csv};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -21,14 +21,14 @@ fn main() {
 
     let csv_file_path = &args[1];
 
-    // Determine the directory of the executable
-    let exe_path = env::current_exe().expect("Failed to get current executable path");
-    let exe_dir = exe_path
-        .parent()
-        .expect("Failed to get executable directory");
-
-    // Construct the path to the config file
-    let config_file_path = exe_dir.join("config.toml");
+    // Get the path to the config file
+    let config_file_path = match get_config_file_path() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("Error determining config file path: {}", e);
+            process::exit(1);
+        }
+    };
 
     // Read the config file
     let config = match read_config(config_file_path.to_str().unwrap()) {
