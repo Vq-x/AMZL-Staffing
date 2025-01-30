@@ -6,7 +6,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
-pub static TOTAL_HOURS: Lazy<i32> = Lazy::new(|| Config::load().unwrap().total_hours);
+pub static TOTAL_HOURS: Lazy<f32> = Lazy::new(|| Config::load().unwrap().total_hours);
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SortZone {
@@ -108,8 +108,8 @@ impl Aisle {
             .sum()
     }
 
-    pub fn get_aisle_pph(&self) -> i32 {
-        self.total_packages() / *TOTAL_HOURS
+    pub fn get_aisle_pph(&self) -> f32 {
+        self.total_packages() as f32 / *TOTAL_HOURS
     }
 
     pub fn display_aisle(&self) -> String {
@@ -193,11 +193,11 @@ impl Floor {
         Self { clusters }
     }
 
-    pub fn packages_per_hour(&self) -> i32 {
+    pub fn packages_per_hour(&self) -> f32 {
         self.clusters
             .iter()
             .map(|c| c.aisles.iter().map(|a| a.total_packages()).sum::<i32>())
-            .sum::<i32>()
+            .sum::<i32>() as f32
             / *TOTAL_HOURS
     }
 
@@ -234,8 +234,7 @@ pub struct StowSlot<'a> {
     pub cluster: char,
     pub aisles: Vec<&'a Aisle>,
     pub is_floater: bool,
-    pub pph: i32,
-    pub floor: &'a Floor,
+    pub pph: f32,
 }
 
 impl<'a> StowSlot<'a> {
@@ -244,8 +243,7 @@ impl<'a> StowSlot<'a> {
             cluster,
             aisles,
             is_floater: false,
-            pph: 0,
-            floor,
+            pph: 0.0,
         };
         obj.update_pph();
         obj
@@ -256,17 +254,10 @@ impl<'a> StowSlot<'a> {
         self.update_pph();
     }
 
-    pub fn add_aisle_range(&mut self, start: u32, end: u32, cluster: char) {
-        for aisle in start..end {
-            if let Some(aisle_ref) = self.floor.get_aisle_in_cluster(cluster, aisle) {
-                self.add_aisle(aisle_ref);
-            }
-        }
-    }
-
     fn update_pph(&mut self) {
-        self.pph = self.aisles.iter().map(|a| a.total_packages()).sum::<i32>() / *TOTAL_HOURS;
-        self.is_floater = self.pph <= 150;
+        self.pph =
+            self.aisles.iter().map(|a| a.total_packages()).sum::<i32>() as f32 / *TOTAL_HOURS;
+        self.is_floater = self.pph <= 150.0;
     }
 
     pub fn display_aisles(&self) {
@@ -277,11 +268,10 @@ impl<'a> StowSlot<'a> {
 
     pub fn display_aisle_range(&self) {
         println!(
-            "{} - {}: {} PPH, is consecutive: {}, is floater: {}",
+            "{} - {}: {} PPH, is floater: {}",
             self.aisles.first().unwrap().display_aisle(),
             self.aisles.last().unwrap().display_aisle(),
-            self.pph,
-            self.is_consecutive(),
+            self.pph as i32,
             self.is_floater
         );
     }
@@ -343,7 +333,7 @@ impl<'a> StowSlotBuilder<'a> {
                 match cluster.get_previous_aisle(aisle.aisle_num) {
                     Some(previous_aisle) => {
                         if let Some(existing_slot) = self.get_stow_slot_from_aisle(previous_aisle) {
-                            if existing_slot.pph <= target_pph {
+                            if existing_slot.pph <= target_pph as f32 {
                                 existing_slot.add_aisle(aisle);
                                 continue;
                             }
@@ -352,10 +342,10 @@ impl<'a> StowSlotBuilder<'a> {
                         self.stow_slots.push(new_slot);
                     }
                     None => {
-                        println!(
-                            "No previous aisle found for aisle number {} in cluster {}",
-                            aisle.aisle_num, cluster.cluster
-                        );
+                        // println!(
+                        //     "No previous aisle found for aisle number {} in cluster {}",
+                        //     aisle.aisle_num, cluster.cluster
+                        // );
                         let new_slot = StowSlot::new(cluster.cluster, vec![aisle], self.floor);
                         self.stow_slots.push(new_slot);
                     }
