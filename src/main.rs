@@ -1,4 +1,3 @@
-mod config;
 mod models;
 mod utils;
 
@@ -6,6 +5,7 @@ use std::env;
 use std::error::Error;
 use std::io::{self, Write};
 use std::process;
+use std::rc::Rc;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
@@ -21,8 +21,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let floor = models::Floor::new(records);
     print_summary(&floor);
 
-    let mut stow_slot_builder = models::StowSlotBuilder::new(&floor);
-    stow_slot_builder.start_algorithm(config.target_pph);
+    let floor_rc = Rc::new(floor);
+    let mut stow_slot_builder = models::StowSlotBuilder::new(Rc::clone(&floor_rc));
+
+    stow_slot_builder.start_algorithm(models::AlgorithmConfig {
+        algorithm: config.algorithm,
+        target_pph: config.target_pph,
+        target_hc: config.target_hc,
+    });
     print_results(&stow_slot_builder);
 
     wait_for_enter()?;

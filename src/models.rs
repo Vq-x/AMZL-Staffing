@@ -1,12 +1,26 @@
 use crate::utils::Config;
 use once_cell::sync::Lazy;
 use serde::de::{self, Deserializer, Visitor};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
+use std::rc::Rc;
 
 pub static TOTAL_HOURS: Lazy<f32> = Lazy::new(|| Config::load().unwrap().total_hours);
+
+#[derive(Default, Serialize, Deserialize, Debug)]
+pub enum Algorithm {
+    TargetHC,
+    #[default]
+    TargetPPH,
+}
+#[derive(Default, Serialize, Deserialize)]
+pub struct AlgorithmConfig {
+    pub algorithm: Algorithm,
+    pub target_pph: i32,
+    pub target_hc: i32,
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SortZone {
@@ -120,19 +134,20 @@ impl Aisle {
 #[derive(Debug)]
 pub struct Cluster {
     pub cluster: char,
-    pub aisles: Vec<Aisle>,
+    pub aisles: Vec<Rc<Aisle>>,
+    pub aisle_pairs: Vec<AislePair>,
 }
 
 impl Cluster {
-    pub fn get_aisle(&self, aisle: u32) -> Option<&Aisle> {
+    pub fn get_aisle(&self, aisle: u32) -> Option<&Rc<Aisle>> {
         self.aisles.iter().find(|a| a.aisle_num == aisle)
     }
 
-    pub fn get_first_aisle(&self) -> Option<&Aisle> {
+    pub fn get_first_aisle(&self) -> Option<&Rc<Aisle>> {
         self.aisles.iter().min_by_key(|a| a.aisle_num)
     }
 
-    pub fn get_last_aisle(&self) -> Option<&Aisle> {
+    pub fn get_last_aisle(&self) -> Option<&Rc<Aisle>> {
         self.aisles.iter().max_by_key(|a| a.aisle_num)
     }
 
@@ -140,12 +155,60 @@ impl Cluster {
         self.aisles.iter().map(|a| a.total_packages()).sum::<i32>()
     }
 
-    pub fn get_next_aisle(&self, aisle: u32) -> Option<&Aisle> {
+    pub fn get_next_aisle(&self, aisle: u32) -> Option<&Rc<Aisle>> {
         self.aisles.iter().find(|a| a.aisle_num == aisle + 1)
     }
 
-    pub fn get_previous_aisle(&self, aisle: u32) -> Option<&Aisle> {
+    pub fn get_previous_aisle(&self, aisle: u32) -> Option<&Rc<Aisle>> {
         self.aisles.iter().find(|a| a.aisle_num == aisle - 1)
+    }
+
+    pub fn generate_aisle_pairs(&mut self) {
+        self.aisle_pairs.clear();
+
+        // Sort aisles by aisle number to ensure proper pairing
+        self.aisles.sort_by_key(|a| a.aisle_num);
+
+        // Group aisles into pairs (odd with even)
+        for (i, aisle) in self.aisles.iter().enumerate() {
+            // Skip even aisles as starting points (we want odd-even pairs)
+            if aisle.aisle_num % 2 == 0 {
+                continue;
+            }
+
+            // Find the next aisle (which should be even)
+            if let Some(next_idx) = self
+                .aisles
+                .iter()
+                .position(|a| a.aisle_num == aisle.aisle_num + 1)
+            {
+                // Create a pair with the current (odd) aisle and the next (even) aisle
+                let pair = AislePair {
+                    aisle1: Some(Rc::clone(&self.aisles[i])),
+                    aisle2: Some(Rc::clone(&self.aisles[next_idx])),
+                };
+                self.aisle_pairs.push(pair);
+            } else {
+                // If no matching even aisle, create a pair with just the odd aisle
+                let pair = AislePair {
+                    aisle1: Some(Rc::clone(&self.aisles[i])),
+                    aisle2: None,
+                };
+                self.aisle_pairs.push(pair);
+            }
+        }
+    }
+
+    // Get aisles from a pair, sharing references instead of cloning
+    pub fn get_aisles_from_pair(&self, pair: &AislePair) -> Vec<Rc<Aisle>> {
+        let mut result = Vec::new();
+        if let Some(aisle) = &pair.aisle1 {
+            result.push(Rc::clone(aisle));
+        }
+        if let Some(aisle) = &pair.aisle2 {
+            result.push(Rc::clone(aisle));
+        }
+        result
     }
 }
 
@@ -168,29 +231,49 @@ impl Floor {
                     .iter_mut()
                     .find(|a| a.aisle_num == aisle_number);
                 if let Some(aisle) = aisle {
-                    aisle.bag_records.push(bag);
+                    // Clone the Rc to avoid the borrow checker error
+                    let aisle_clone = Rc::clone(aisle);
+                    // Check if we can get a mutable reference
+                    if let Some(aisle_mut) = Rc::get_mut(aisle) {
+                        aisle_mut.bag_records.push(bag);
+                    } else {
+                        // If we can't get a mutable reference, create a new Aisle with the updated bag_records
+                        let mut new_bag_records = aisle_clone.bag_records.clone();
+                        new_bag_records.push(bag);
+                        *aisle = Rc::new(Aisle {
+                            cluster: cluster_char,
+                            aisle_num: aisle_number,
+                            bag_records: new_bag_records,
+                        });
+                    }
                 } else {
-                    cluster.aisles.push(Aisle {
+                    cluster.aisles.push(Rc::new(Aisle {
                         cluster: cluster_char,
                         aisle_num: aisle_number,
                         bag_records: vec![bag],
-                    });
+                    }));
                 }
             } else {
                 clusters.push(Cluster {
                     cluster: cluster_char,
-                    aisles: vec![Aisle {
+                    aisles: vec![Rc::new(Aisle {
                         cluster: cluster_char,
                         aisle_num: aisle_number,
                         bag_records: vec![bag],
-                    }],
+                    })],
+                    aisle_pairs: Vec::new(),
                 });
             }
         }
-        clusters.iter_mut().for_each(|c| {
-            c.aisles.sort_by_key(|a| a.aisle_num);
-        });
-        Self { clusters }
+
+        // Sort aisles by aisle number
+        for cluster in &mut clusters {
+            cluster.aisles.sort_by_key(|a| a.aisle_num);
+        }
+
+        let mut floor = Self { clusters };
+        floor.generate_aisle_pairs();
+        floor
     }
 
     pub fn packages_per_hour(&self) -> f32 {
@@ -201,7 +284,7 @@ impl Floor {
             / *TOTAL_HOURS
     }
 
-    pub fn get_aisle_in_cluster(&self, cluster: char, aisle: u32) -> Option<&Aisle> {
+    pub fn get_aisle_in_cluster(&self, cluster: char, aisle: u32) -> Option<&Rc<Aisle>> {
         self.clusters
             .iter()
             .find(|c| c.cluster == cluster)
@@ -227,18 +310,47 @@ impl Floor {
     pub fn cluster(&self, cluster: char) -> Option<&Cluster> {
         self.clusters.iter().find(|c| c.cluster == cluster)
     }
+
+    pub fn get_total_stow_slots(&self) -> i32 {
+        self.clusters
+            .iter()
+            .map(|c| c.aisles.iter().map(|a| a.total_packages()).sum::<i32>())
+            .sum::<i32>()
+    }
+
+    pub fn generate_aisle_pairs(&mut self) {
+        for cluster in &mut self.clusters {
+            cluster.generate_aisle_pairs();
+        }
+    }
+
+    pub fn get_all_aisle_pairs(&self) -> Vec<&AislePair> {
+        self.clusters
+            .iter()
+            .flat_map(|c| c.aisle_pairs.iter())
+            .collect()
+    }
+
+    pub fn create_stow_slot_builder(self) -> StowSlotBuilder {
+        let floor_rc = Rc::new(self);
+        StowSlotBuilder::new(floor_rc)
+    }
+
+    pub fn to_rc(self) -> Rc<Self> {
+        Rc::new(self)
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct StowSlot<'a> {
+pub struct StowSlot {
     pub cluster: char,
-    pub aisles: Vec<&'a Aisle>,
+    pub aisles: Vec<Rc<Aisle>>,
     pub is_floater: bool,
     pub pph: f32,
 }
 
-impl<'a> StowSlot<'a> {
-    pub fn new(cluster: char, aisles: Vec<&'a Aisle>, floor: &'a Floor) -> Self {
+impl StowSlot {
+    pub fn new(cluster: char, aisles: Vec<Rc<Aisle>>, _floor: &Floor) -> Self {
         let mut obj = Self {
             cluster,
             aisles,
@@ -249,7 +361,7 @@ impl<'a> StowSlot<'a> {
         obj
     }
 
-    pub fn add_aisle(&mut self, aisle: &'a Aisle) {
+    pub fn add_aisle(&mut self, aisle: Rc<Aisle>) {
         self.aisles.push(aisle);
         self.update_pph();
     }
@@ -284,24 +396,77 @@ impl<'a> StowSlot<'a> {
     }
 }
 
-#[derive(Debug)]
-pub struct StowSlotBuilder<'a> {
-    floor: &'a Floor,
-    pub stow_slots: Vec<StowSlot<'a>>,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AisleId {
+    pub cluster: char,
+    pub aisle_num: u32,
 }
 
-impl<'a> StowSlotBuilder<'a> {
-    pub fn new(floor: &'a Floor) -> Self {
+impl AisleId {
+    pub fn new(cluster: char, aisle_num: u32) -> Self {
+        Self { cluster, aisle_num }
+    }
+
+    pub fn from_aisle(aisle: &Aisle) -> Self {
+        Self {
+            cluster: aisle.cluster,
+            aisle_num: aisle.aisle_num,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AislePair {
+    pub aisle1: Option<Rc<Aisle>>,
+    pub aisle2: Option<Rc<Aisle>>,
+}
+
+impl AislePair {
+    pub fn is_complete(&self) -> bool {
+        self.aisle1.is_some() && self.aisle2.is_some()
+    }
+
+    pub fn total_packages(&self) -> i32 {
+        let mut total = 0;
+        if let Some(aisle) = &self.aisle1 {
+            total += aisle.total_packages();
+        }
+        if let Some(aisle) = &self.aisle2 {
+            total += aisle.total_packages();
+        }
+        total
+    }
+
+    pub fn display(&self) -> String {
+        match (&self.aisle1, &self.aisle2) {
+            (Some(a1), Some(a2)) => format!("{} & {}", a1.display_aisle(), a2.display_aisle()),
+            (Some(a1), None) => format!("{} (unpaired)", a1.display_aisle()),
+            (None, Some(a2)) => format!("{} (unpaired)", a2.display_aisle()),
+            (None, None) => "Empty pair".to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct StowSlotBuilder {
+    floor: Rc<Floor>,
+    pub stow_slots: Vec<StowSlot>,
+}
+
+impl StowSlotBuilder {
+    pub fn new(floor: Rc<Floor>) -> Self {
         Self {
             floor,
             stow_slots: Vec::new(),
         }
     }
 
-    pub fn get_stow_slot_from_aisle(&mut self, aisle: &Aisle) -> Option<&mut StowSlot<'a>> {
-        self.stow_slots
-            .iter_mut()
-            .find(|s| s.aisles.iter().any(|a| *a == aisle))
+    pub fn get_stow_slot_from_aisle(&mut self, aisle: &Rc<Aisle>) -> Option<&mut StowSlot> {
+        self.stow_slots.iter_mut().find(|s| {
+            s.aisles
+                .iter()
+                .any(|a| a.aisle_num == aisle.aisle_num && a.cluster == aisle.cluster)
+        })
     }
 
     pub fn display_stow_slots(&self) {
@@ -327,35 +492,64 @@ impl<'a> StowSlotBuilder<'a> {
         }
     }
 
-    pub fn start_algorithm(&mut self, target_pph: i32) {
+    pub fn check_stow_slot_pairs(&self, _stow_slot: &StowSlot) {}
+
+    pub fn start_algorithm(&mut self, algorithm: AlgorithmConfig) {
+        match algorithm.algorithm {
+            Algorithm::TargetPPH => self.start_algorithm_target_pph(algorithm),
+            Algorithm::TargetHC => self.start_algorithm_target_hc(algorithm),
+        }
+    }
+
+    pub fn start_algorithm_target_pph(&mut self, algorithm: AlgorithmConfig) {
+        // First collect all the aisles we need to process
+        let mut aisle_assignments: Vec<(char, Rc<Aisle>, Option<Rc<Aisle>>)> = Vec::new();
+
         for cluster in &self.floor.clusters {
             for aisle in &cluster.aisles {
-                match cluster.get_previous_aisle(aisle.aisle_num) {
-                    Some(previous_aisle) => {
-                        if let Some(existing_slot) = self.get_stow_slot_from_aisle(previous_aisle) {
-                            if existing_slot.pph <= target_pph as f32 {
-                                existing_slot.add_aisle(aisle);
-                                continue;
-                            }
+                let previous = cluster.get_previous_aisle(aisle.aisle_num).cloned();
+                aisle_assignments.push((cluster.cluster, Rc::clone(aisle), previous));
+            }
+        }
+
+        // Now process the assignments without borrowing self as immutable and mutable at the same time
+        for (cluster_char, aisle, previous_aisle) in aisle_assignments {
+            match previous_aisle {
+                Some(previous) => {
+                    if let Some(existing_slot) = self.get_stow_slot_from_aisle(&previous) {
+                        if existing_slot.pph <= algorithm.target_pph as f32 {
+                            existing_slot.add_aisle(Rc::clone(&aisle));
+                            continue;
                         }
-                        let new_slot = StowSlot::new(cluster.cluster, vec![aisle], self.floor);
-                        self.stow_slots.push(new_slot);
                     }
-                    None => {
-                        // println!(
-                        //     "No previous aisle found for aisle number {} in cluster {}",
-                        //     aisle.aisle_num, cluster.cluster
-                        // );
-                        let new_slot = StowSlot::new(cluster.cluster, vec![aisle], self.floor);
-                        self.stow_slots.push(new_slot);
-                    }
+                    let new_slot =
+                        StowSlot::new(cluster_char, vec![Rc::clone(&aisle)], &self.floor);
+                    self.stow_slots.push(new_slot);
+                }
+                None => {
+                    let new_slot =
+                        StowSlot::new(cluster_char, vec![Rc::clone(&aisle)], &self.floor);
+                    self.stow_slots.push(new_slot);
                 }
             }
         }
     }
 
-    pub fn with_target_pph(mut self, target_pph: i32) -> Self {
-        self.start_algorithm(target_pph);
-        self
+    pub fn start_algorithm_target_hc(&mut self, _algorithm: AlgorithmConfig) {
+        // First collect all the aisle pairs we need to process
+        let mut pair_assignments: Vec<(char, Vec<Rc<Aisle>>)> = Vec::new();
+
+        for cluster in &self.floor.clusters {
+            for aisle_pair in &cluster.aisle_pairs {
+                let aisles = cluster.get_aisles_from_pair(aisle_pair);
+                pair_assignments.push((cluster.cluster, aisles));
+            }
+        }
+
+        // Now process the assignments without borrowing self as immutable and mutable at the same time
+        for (cluster_char, aisles) in pair_assignments {
+            let stow_slot = StowSlot::new(cluster_char, aisles, &self.floor);
+            self.stow_slots.push(stow_slot);
+        }
     }
 }

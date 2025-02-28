@@ -1,4 +1,4 @@
-use crate::models::BagRecord;
+use crate::models::{Algorithm, BagRecord};
 use csv::Reader;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -11,6 +11,8 @@ use std::{
 pub struct Config {
     pub target_pph: i32,
     pub total_hours: f32,
+    pub target_hc: i32,
+    pub algorithm: Algorithm,
     // Add other configuration fields as needed
 }
 
@@ -63,6 +65,8 @@ impl Default for Config {
         Config {
             target_pph: 250,
             total_hours: 6.5,
+            target_hc: 30,
+            algorithm: Algorithm::TargetPPH,
         }
     }
 }
