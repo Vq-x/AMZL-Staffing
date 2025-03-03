@@ -1,6 +1,7 @@
 mod models;
 mod utils;
 
+use std::cell::RefCell;
 use std::env;
 use std::error::Error;
 use std::io::{self, Write};
@@ -21,7 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let floor = models::Floor::new(records);
     print_summary(&floor);
 
-    let floor_rc = Rc::new(floor);
+    let floor_rc = Rc::new(RefCell::new(floor));
     let mut stow_slot_builder = models::StowSlotBuilder::new(Rc::clone(&floor_rc));
 
     stow_slot_builder.start_algorithm(models::AlgorithmConfig {

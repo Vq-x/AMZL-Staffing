@@ -2,6 +2,7 @@ use crate::utils::Config;
 use once_cell::sync::Lazy;
 use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
@@ -198,6 +199,12 @@ impl Cluster {
             }
         }
     }
+    pub fn aisle_pairs_len(&mut self) -> usize {
+        if self.aisle_pairs.is_empty() {
+            self.generate_aisle_pairs();
+        }
+        self.aisle_pairs.len()
+    }
 
     // Get aisles from a pair, sharing references instead of cloning
     pub fn get_aisles_from_pair(&self, pair: &AislePair) -> Vec<Rc<Aisle>> {
@@ -209,6 +216,47 @@ impl Cluster {
             result.push(Rc::clone(aisle));
         }
         result
+    }
+
+    // get lowest pph from a set amount of aisle pairs
+    pub fn get_lowest_pph(
+        &self,
+        aisle_pair_range: usize,
+        max_aisle_count: usize,
+    ) -> Vec<(StowSlot, f32)> {
+        let mut stow_slots = Vec::new();
+        // iterate through the aisle pairs and get the next n aisles and calculate the pph, return the lowest pph range.
+        for i in 0..self.aisle_pairs.len() {
+            if i + aisle_pair_range > self.aisle_pairs.len() {
+                break;
+            }
+            let pph = self.aisle_pairs[i..i + aisle_pair_range]
+                .iter()
+                .map(|pair| {
+                    let aisles = self.get_aisles_from_pair(pair);
+                    aisles
+                        .iter()
+                        .map(|a| a.total_packages() as f32 / *TOTAL_HOURS)
+                        .sum::<f32>()
+                })
+                .sum::<f32>();
+            stow_slots.push((
+                StowSlot::new(
+                    self.cluster,
+                    self.aisle_pairs[i..i + aisle_pair_range]
+                        .iter()
+                        .flat_map(|pair| self.get_aisles_from_pair(pair))
+                        .collect(),
+                ),
+                pph,
+            ));
+        }
+        stow_slots.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Take only the first five elements (or fewer if there aren't five)
+        let count = std::cmp::min(max_aisle_count, stow_slots.len());
+        // stow_slots.into_iter().take(count).collect()
+        stow_slots
     }
 }
 
@@ -332,12 +380,12 @@ impl Floor {
     }
 
     pub fn create_stow_slot_builder(self) -> StowSlotBuilder {
-        let floor_rc = Rc::new(self);
+        let floor_rc = Rc::new(RefCell::new(self));
         StowSlotBuilder::new(floor_rc)
     }
 
-    pub fn to_rc(self) -> Rc<Self> {
-        Rc::new(self)
+    pub fn to_rc(self) -> Rc<RefCell<Self>> {
+        Rc::new(RefCell::new(self))
     }
 }
 
@@ -350,7 +398,7 @@ pub struct StowSlot {
 }
 
 impl StowSlot {
-    pub fn new(cluster: char, aisles: Vec<Rc<Aisle>>, _floor: &Floor) -> Self {
+    pub fn new(cluster: char, aisles: Vec<Rc<Aisle>>) -> Self {
         let mut obj = Self {
             cluster,
             aisles,
@@ -396,25 +444,6 @@ impl StowSlot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AisleId {
-    pub cluster: char,
-    pub aisle_num: u32,
-}
-
-impl AisleId {
-    pub fn new(cluster: char, aisle_num: u32) -> Self {
-        Self { cluster, aisle_num }
-    }
-
-    pub fn from_aisle(aisle: &Aisle) -> Self {
-        Self {
-            cluster: aisle.cluster,
-            aisle_num: aisle.aisle_num,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct AislePair {
     pub aisle1: Option<Rc<Aisle>>,
@@ -449,12 +478,12 @@ impl AislePair {
 
 #[derive(Debug)]
 pub struct StowSlotBuilder {
-    floor: Rc<Floor>,
+    floor: Rc<RefCell<Floor>>,
     pub stow_slots: Vec<StowSlot>,
 }
 
 impl StowSlotBuilder {
-    pub fn new(floor: Rc<Floor>) -> Self {
+    pub fn new(floor: Rc<RefCell<Floor>>) -> Self {
         Self {
             floor,
             stow_slots: Vec::new(),
@@ -480,13 +509,22 @@ impl StowSlotBuilder {
     }
 
     pub fn stow_slots_per_cluster(&self) {
-        for cluster in &self.floor.clusters {
+        // Create a local copy of the data we need to avoid borrowing issues
+        let clusters: Vec<_> = self
+            .floor
+            .borrow()
+            .clusters
+            .iter()
+            .map(|c| c.cluster)
+            .collect();
+
+        for cluster_char in clusters {
             println!(
                 "stow slots in cluster {}: {}",
-                cluster.cluster,
+                cluster_char,
                 self.stow_slots
                     .iter()
-                    .filter(|s| s.cluster == cluster.cluster)
+                    .filter(|s| s.cluster == cluster_char)
                     .count()
             );
         }
@@ -505,14 +543,19 @@ impl StowSlotBuilder {
         // First collect all the aisles we need to process
         let mut aisle_assignments: Vec<(char, Rc<Aisle>, Option<Rc<Aisle>>)> = Vec::new();
 
-        for cluster in &self.floor.clusters {
-            for aisle in &cluster.aisles {
-                let previous = cluster.get_previous_aisle(aisle.aisle_num).cloned();
-                aisle_assignments.push((cluster.cluster, Rc::clone(aisle), previous));
+        // Collect all the data we need in a separate scope to limit the borrow
+        {
+            // Borrow the floor immutably to collect data
+            let floor = self.floor.borrow();
+            for cluster in &floor.clusters {
+                for aisle in &cluster.aisles {
+                    let previous = cluster.get_previous_aisle(aisle.aisle_num).cloned();
+                    aisle_assignments.push((cluster.cluster, Rc::clone(aisle), previous));
+                }
             }
         }
 
-        // Now process the assignments without borrowing self as immutable and mutable at the same time
+        // Now process the assignments without borrowing self.floor
         for (cluster_char, aisle, previous_aisle) in aisle_assignments {
             match previous_aisle {
                 Some(previous) => {
@@ -522,34 +565,42 @@ impl StowSlotBuilder {
                             continue;
                         }
                     }
-                    let new_slot =
-                        StowSlot::new(cluster_char, vec![Rc::clone(&aisle)], &self.floor);
+                    // Borrow floor only when needed and in a limited scope
+                    let new_slot = {
+                        let floor = self.floor.borrow();
+                        StowSlot::new(cluster_char, vec![Rc::clone(&aisle)])
+                    };
                     self.stow_slots.push(new_slot);
                 }
                 None => {
-                    let new_slot =
-                        StowSlot::new(cluster_char, vec![Rc::clone(&aisle)], &self.floor);
+                    // Borrow floor only when needed and in a limited scope
+                    let new_slot = {
+                        let floor = self.floor.borrow();
+                        StowSlot::new(cluster_char, vec![Rc::clone(&aisle)])
+                    };
                     self.stow_slots.push(new_slot);
                 }
             }
         }
     }
 
-    pub fn start_algorithm_target_hc(&mut self, _algorithm: AlgorithmConfig) {
-        // First collect all the aisle pairs we need to process
-        let mut pair_assignments: Vec<(char, Vec<Rc<Aisle>>)> = Vec::new();
-
-        for cluster in &self.floor.clusters {
-            for aisle_pair in &cluster.aisle_pairs {
-                let aisles = cluster.get_aisles_from_pair(aisle_pair);
-                pair_assignments.push((cluster.cluster, aisles));
-            }
+    pub fn start_algorithm_target_hc(&mut self, algorithm: AlgorithmConfig) {
+        // First generate the aisle pairs
+        {
+            // Use a block to limit the scope of the mutable borrow
+            let mut floor = self.floor.borrow_mut();
+            floor.generate_aisle_pairs();
         }
 
-        // Now process the assignments without borrowing self as immutable and mutable at the same time
-        for (cluster_char, aisles) in pair_assignments {
-            let stow_slot = StowSlot::new(cluster_char, aisles, &self.floor);
-            self.stow_slots.push(stow_slot);
-        }
+        // Now collect all the aisle pairs we need to process
+        let mut lowest_pph: Vec<(StowSlot, f32)> = Vec::new();
+        self.floor.borrow().clusters.iter().for_each(|c| {
+            let lowest = c.get_lowest_pph(3, 3);
+            lowest_pph.extend(lowest);
+        });
+        lowest_pph.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        lowest_pph
+            .iter()
+            .for_each(|slot| slot.0.display_aisle_range());
     }
 }
