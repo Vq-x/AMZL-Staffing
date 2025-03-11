@@ -29,6 +29,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         algorithm: config.algorithm,
         target_pph: config.target_pph,
         target_hc: config.target_hc,
+        max_aisle_count: config.max_aisle_count,
+        min_aisle_count: config.min_aisle_count,
     });
     print_results(&stow_slot_builder);
 

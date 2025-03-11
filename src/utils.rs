@@ -13,6 +13,8 @@ pub struct Config {
     pub total_hours: f32,
     pub target_hc: i32,
     pub algorithm: Algorithm,
+    pub max_aisle_count: i32,
+    pub min_aisle_count: i32,
     // Add other configuration fields as needed
 }
 
@@ -67,6 +69,8 @@ impl Default for Config {
             total_hours: 6.5,
             target_hc: 30,
             algorithm: Algorithm::TargetPPH,
+            max_aisle_count: 3,
+            min_aisle_count: 2,
         }
     }
 }
